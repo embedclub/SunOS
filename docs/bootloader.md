@@ -1,4 +1,4 @@
-#add env 
+# add env 
 ## linux-4.0
 sudo apt-get install qemu libncurses5-dev
 sudo apt-get install build-essential gcc-5-aarch64-linux-gnu
@@ -12,7 +12,7 @@ https://mirrors.tuna.tsinghua.edu.cn/help/AOSP/
 
 git clone https://github.com/torvalds/linux.git -b linux-4.0
 
-
+## 启动流程
 1. Bootloader 引导
 当我们按下手机的电源键时，首先会运行bootloader，bootloader的主要作用是初始化基本的硬件设备（例如 CPU 内存 Flash等），并且建立空间映射。目的是为装载Linux内核做好准备，在Linux内核装载完毕后，bootloader会被移除。
 在bootloader的运行期间，用户可以通过规定好的组合键，可以进入系统的两个模块
