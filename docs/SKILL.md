@@ -41,7 +41,7 @@ argument-hint: LeetCode题号或题目描述
 - 基本功能测试
 - 边界值测试（空输入、单元素、极大值等）
 - 压力/性能测试
-- 用 `assert` 或测试框架运行验证
+- 使用GoogleTest测试框架运行验证
 
 ### 6. 扩展思考（可选）
 - 如果输入规模变化如何调整
@@ -54,5 +54,5 @@ argument-hint: LeetCode题号或题目描述
 ```
 /leetcode 两数之和
 /leetcode 146. LRU Cache
-/leetcode 接雨水 用Go实现并生成测试
+/leetcode 接雨水 用C语言实现并生成测试
 ```
