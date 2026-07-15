@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>第23章 程序和容器格式</title>
+</head>
+<body>
+<h1 id="program-and-container-format">23 程序和容器格式</h1>
+<h2 id="summary-22">摘要</h2>
+<p>编译后的网络以两层文件的形式到达引擎：一个调度描述符（dispatch descriptor），即一个 FlatBuffer，用于命名操作并绑定缓冲区；以及一个硬件容器（hardware container）。硬件容器是一个 Mach-O 形状的文件，魔数为 0xbeefface，包含寄存器写入程序和权重库。描述符跟踪的是调度次数而非操作次数：任何深度的融合图都缩减为一个推理操作，前后由输入和输出转换（cast）包围，而桥接切割（bridge cut）则每个段增加一个推理操作。两者之间是硬件任务描述符 ZinAneTdHw_v10，一个七组寄存器映像，以 44 字节记录的稀疏序列化形式存储，其缓冲区基址是在加载时解析的重定位槽。</p>
+<h2 id="two-layers">23.1 两层架构</h2>
+<p>一个模型经过六种磁盘上和内存中的形式，表 23.1 给出了每种形式的格式、标识标签和角色。</p>
+<p>表 23.1. 模型经过的六种磁盘上和内存中的形式，每种形式包括其格式、标识标签和角色。</p>
+<table>
+<tbody>
+<tr>
+<td>阶段</td>
+<td>格式</td>
+<td>标签</td>
+<td>角色</td>
+</tr>
+<tr>
+<td>中间语言文本</td>
+<td>文本</td>
+<td>版本化 3520.4.1</td>
+<td>编译器的输入</td>
+</tr>
+<tr>
+<td>网络描述</td>
+<td>属性列表</td>
+<td>版本 1.0.10</td>
+<td>层和连线图</td>
+</tr>
+<tr>
+<td>硬件容器</td>
+<td>Mach-O 形状</td>
+<td>0xbefface</td>
+<td>寄存器写入程序加权重</td>
+</tr>
+<tr>
+<td>调度描述符</td>
+<td>FlatBuffer</td>
+<td>vtable 0c00 1400 0400 0800</td>
+<td>运行时提交的操作链</td>
+</tr>
+<tr>
+<td>加载的程序映像</td>
+<td>Mach-O 形状，已签名</td>
+<td>0xbefface</td>
+<td>同一容器，每次加载虚拟化</td>
+</tr>
+<tr>
+<td>固件容器</td>
+<td>分段 blob</td>
+<td>ANEH / ANEP / ANES</td>
+<td>封装内加载形式</td>
+</tr>
+</tbody>
+</table>
+<p>编译器为一个网络生成调度描述符和硬件容器，并缓存在一起。调度描述符位于中间语言的操作级别之上：它将操作链保存为参数化程序结构，每个操作缩减为一个参数帧和一个内核属性 blob。硬件容器位于该级别之下：它包含寄存器写入流、为流式数据路径布局的权重系数、以及类型化的输入和输出布局，全部存储在一个魔数为 0xbeefface 的 Mach-O 形状文件中。硬件容器和加载的程序映像共用一种字节格式：加载后的副本是经过地址重定位解析后的磁盘上容器。</p>
+<p>图 23.1 展示了分层结构：调度描述符在上，硬件容器居中，任务描述符寄存器组在下，用于驱动 DMA 引擎和乘法阵列。</p>
+<p><img role="img" aria-label="image" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAItA8gDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigBhmiUkGVAR1BYUn2iH/AJ7R/wDfQrzLR/Cui69r/iafU7IXEkepyIrGR1wOuPlIrb/4Vx4S/wCgQv8A3/l/+KrVwitG/wAP+CZKcnql/X3HZfaIf+e0f/fQo+0Q/wDPaP8A76Fcb/wrjwl/0CF/7/y//FUf8K48Jf8AQIX/AL/y/wDxVLlh3f3f8EfNPsvv/wCAdl9oh/57R/8AfQo+0Q/89o/++hXG/wDCuPCX/QIX/v8Ay/8AxVH/AArjwl/0CF/7/wAv/wAVRyw7v7v+CHNPsvv/AOAdl9oh/wCe0f8A30KPtEP/AD2j/wC+hXG/8K48Jf8AQIX/AL/y/wDxVH/CuPCX/QIX/v8Ay/8AxVHLDu/u/wCCHNPsvv8A+Adl9oh/57R/99Cj7RD/AM9o/wDvoVxv/CuPCX/QIX/v/L/8VR/wrjwl/wBAhf8Av/L/APFUcsO7+7/ghzT7L7/+Adl9oh/57R/99Cj7RD/z2j/76Fcb/wAK48Jf9Ahf+/8AL/8AFUf8K48Jf9Ahf+/8v/xVHLDu/u/4Ic0+y+//AIB2X2iH/ntH/wB9Cj7RD/z2j/76Fcb/AMK48Jf9Ahf+/wDL/wDFUf8ACuPCX/QIX/v/AC//ABVHLDu/u/4Ic0+y+/8A4B2X2iH/AJ7R/wDfQo+0Q/8APaP/AL6Fcb/wrjwl/wBAhf8Av/L/APFUf8K48Jf9Ahf+/wDL/wDFUcsO7+7/AIIc0+y+/wD4B2X2iH/ntH/30KPtEP8Az2j/AO+hXG/8K48Jf9Ahf+/8v/xVH/CuPCX/AECF/wC/8v8A8VRyw7v7v+CHNPsvv/4B2X2iH/ntH/30KPtEP/PaP/voVxv/AArjwl/0CF/7/wAv/wAVR/wrjwl/0CF/7/y//FUcsO7+7/ghzT7L7/8AgHZfaIf+e0f/AH0KPtEP/PaP/voVxv8Awrjwl/0CF/7/AMv/AMVR/wAK48Jf9Ahf+/8AL/8AFUcsO7+7/ghzT7L7/wDgHZfaIf8AntH/ANQ==" /></p>
+<p>图 23.1. 程序格式：调度描述符在上，硬件容器居中，任务描述符寄存器组在下，控制 DMA 引擎和乘法阵列。</p>
+<h2 id="dispatch-descriptor">23.2 调度描述符</h2>
+<p>调度描述符是一个 FlatBuffer，其根表有四个字段。序列化器方法集提供了根布局，逐字节对照真实描述符进行验证，表 23.2 给出了每个字段的 vtable 偏移量、内容和类型。</p>
+<p>表 23.2. 调度描述符根表的四个字段，包括其 vtable 偏移量、内容和类型。</p>
+<table>
+<tbody>
+<tr>
+<td>字段</td>
+<td>Voffset</td>
+<td>内容</td>
+<td>类型</td>
+</tr>
+<tr>
+<td>0</td>
+<td>4</td>
+<td>符号和段名称向量</td>
+<td>symbol_names: [string]</td>
+</tr>
+<tr>
+<td>1</td>
+<td>8</td>
+<td>构建信息键值对</td>
+<td>build_info: BuildInfo</td>
+</tr>
+<tr>
+<td>2</td>
+<td>12</td>
+<td>段描述符向量</td>
+<td>sections: [Section]</td>
+</tr>
+<tr>
+<td>3</td>
+<td>16</td>
+<td>内联标量，值 4</td>
+<td>format_version: int</td>
+</tr>
+</tbody>
+</table>
+<p>描述符可以容纳的操作集是固定的。序列化器为每种操作类型实例化一个属性序列化模板，12 个实例化枚举了完整集合，清单 23.1 以根表和操作类型枚举的形式恢复了这些内容。</p>
+<p>清单 23.1. 从 E5Serializer 符号族恢复的调度描述符根表 FlatBuffer 模式及 12 成员操作类型枚举。</p>
+<div class="sourceCode" id="cb50"><pre class="sourceCode txt"><code class="sourceCode default"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a>// E5Program 根表，从 E5Serializer 符号族恢复</span>
+10177: <span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>// 并对照真实 H13C 调度描述符（3816 B）验证</span>
+10178: <span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>table E5Program {</span>
+10179: <span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>    symbol_names: [string]; // 操作、张量和段名称</span>
+10180: <span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a>    build_info: BuildInfo; // 编译器版本和源码路径 k/v</span>
+10181: <span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a>    sections: [Section]; // 每个操作的 arg_frame + op_attrs 引用</span>
+10182: <span id="cb50-7"><a href="#cb50-7" aria-hidden="true" tabindex="-1"></a>    format_version: int; // 观测值 == 4</span>
+10183: <span id="cb50-8"><a href="#cb50-8" aria-hidden="true" tabindex="-1"></a>}</span>
+10184: <span id="cb50-9"><a href="#cb50-9" aria-hidden="true" tabindex="-1"></a></span>
+10185: <span id="cb50-10"><a href="#cb50-10" aria-hidden="true" tabindex="-1"></a>enum OpType : ubyte {</span>
+10186: <span id="cb50-11"><a href="#cb50-11" aria-hidden="true" tabindex="-1"></a>    Cast, AneInference, EirInference, CpuInference, BnnsCpuInference,</span>
+10187: <span id="cb50-12"><a href="#cb50-12" aria-hidden="true" tabindex="-1"></a>    MlcCpuInference, MpsGraphInference, E5MinimalCpu, Quant, Dequant,</span>
+10188: <span id="cb50-13"><a href="#cb50-13" aria-hidden="true" tabindex="-1"></a>    Barrier, JitCall // 序号推断；成员关系已测量</span>
+10189: <span id="cb50-14"><a href="#cb50-14" aria-hidden="true" tabindex="-1"></a>} </span></code></pre></div>
+<p>该模式是从序列化器符号族而非嵌入式反射中恢复的，因为运行时会剥离二进制模式和模式源码。决定性证据是 E5Serializer 方法集——每个模式表对应一个序列化器方法，属性序列化模板为每种操作类型实例化一次——因此表列表和操作类型枚举直接从符号中得出。表 23.3 将每个反编绎后的序列化器方法与其证明的模式表或操作类型联合体配对。</p>
+<p>表 23.3. 调度描述符的序列化器方法，每个方法证明一个模式表或操作类型联合体。</p>
+<div class="sourceCode" id="cb51"><pre class="sourceCode txt"><code class="sourceCode default"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a>反编绎后序列化器方法 其证明的模式元素</span>
+10201: <span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>    SerializeFunction 表 Function</span>
+10202: <span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>    SerializeBlock 表 Block</span>
+10203: <span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>    SerializeOperation 表 Operation</span>
+10204: <span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a>    SerializeOpArgFrame 操作的 __arg_frame 段</span>
+10205: <span id="cb51-6"><a href="#cb51-6" aria-hidden="true" tabindex="-1"></a>    SerializeOperand 表 Operand</span>
+10206: <span id="cb51-7"><a href="#cb51-7" aria-hidden="true" tabindex="-1"></a>    SerializeIOPort 表 IOPort</span>
+10207: <span id="cb51-8"><a href="#cb51-8" aria-hidden="true" tabindex="-1"></a>    SerializeAliasSymbol(string, uint, uint) 表 AliasSymbol{name, symbol_index, addr_offset}</span>
+10208: <span id="cb51-9"><a href="#cb51-9" aria-hidden="true" tabindex="-1"></a>    SerializeBuildInfo 表 BuildInfo</span>
+10209: <span id="cb51-10"><a href="#cb51-10" aria-hidden="true" tabindex="-1"></a>    SerializeOpAttrs&lt;CastOpT&gt; 及另外 11 个 联合体 OpAttrs 和枚举 OpType </span></code></pre></div>
+<p>张量和表面描述符各有一个固定的字段列表，直接从运行时的类型编码字符串中提取，清单 23.2 中重现。</p>
+<p>清单 23.2. 从运行时类型编码字符串中逐字恢复的张量和表面描述符字段列表。</p>
+<div class="sourceCode" id="cb52"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* TensorDescriptor，每个操作数的布局记录，来自运行时类型编码。</span></span>
+10216: <span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a><span class="co">    Q = u64, i = i32；前两个指针仅运行时使用，不序列化。 */</span></span>
+10217: <span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> TensorDescriptor <span class="op">{</span></span>
+10218: <span id="cb52-4"><a href="#cb52-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span>    <span class="op">*</span>data<span class="op">,</span> <span class="op">*</span>reserved<span class="op">;</span>    <span class="co">/* 运行时指针，不在线路上传输 */</span></span>
+10219: <span id="cb52-5"><a href="#cb52-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span> dim<span class="op">[</span><span class="dv">4</span><span class="op">],</span> stride<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
+10220: <span id="cb52-6"><a href="#cb52-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span> width<span class="op">,</span> height<span class="op">,</span> channels<span class="op">,</span> batch_number<span class="op">,</span> sequence_length<span class="op">;</span></span>
+10221: <span id="cb52-7"><a href="#cb52-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span> stride_width<span class="op">,</span> stride_height<span class="op">,</span> stride_channels<span class="op">;</span></span>
+10222: <span id="cb52-8"><a href="#cb52-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span> stride_batch_number<span class="op">,</span> stride_sequence_length<span class="op">;</span></span>
+10223: <span id="cb52-9"><a href="#cb52-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int32_t</span> storage_type<span class="op">;</span>    <span class="co">/* 元素类型代码 */</span></span>
+10224: <span id="cb52-10"><a href="#cb52-10" aria-hidden="true" tabindex="-1"></a><span class="op">};</span> </span></code></pre></div>
+<p>规范的程序形状是一个融合计算操作，前后由输入和输出格式转换包围。融合为一次引擎调度的网络解码为 Op0_Cast 后跟 Op1_AneInference 再后跟 Op2_Cast。</p>
+<p>转换操作在输入时将主机半精度布局转换为引擎内部交错布局，在输出时转换回来；单个推理操作就是整个融合图。</p>
+<p>每个操作有两个部分：一个参数帧，命名操作数绑定和每轴张量布局；以及一个属性 blob，保存内核参数。属性 blob 是一个嵌套的 FlatBuffer 子描述符，而非展开的微码：其字节多样性为 0.19，是结构化和稀疏记录的低值，描述符大小不随计算形状变化。内维度为 64 的收缩和内维度为 256 的收缩都产生相同的描述符大小，因此计算形状是描述符保存的一个参数，而非其展开的程序。</p>
+<p>由此结构可得出两个性质。描述符是深度不变的：一个单操作图和一个六操作融合图都缩减为相同大小的单个推理操作。它跟踪的是调度次数而非操作次数：将图切割为三个段的桥接操作会产生三个推理操作和一个更大的描述符。</p>
+<h2 id="hardware-task-descriptor">23.3 硬件任务描述符</h2>
+<p>硬件任务描述符是引擎执行的寄存器级程序：下面的每个组都是一个寄存器写入块，配置一个引擎单元。</p>
+<p>表 23.4. 硬件任务描述符的七个寄存器组，每组包括其结构体基偏移量、寄存器数量、可寻址的 aperture 基地址和内容。</p>
+<table>
+<tbody>
+<tr>
+<td>组</td>
+<td>结构体基址</td>
+<td>寄存器数</td>
+<td>寄存器基址</td>
+<td>内容</td>
+</tr>
+<tr>
+<td>内核和公共</td>
+<td>+0x2c</td>
+<td>34</td>
+<td>0x5500</td>
+<td>内核 DMA 使能、格式、步幅、任务类型、网络 ID</td>
+</tr>
+<tr>
+<td>维度</td>
+<td>+0xfc</td>
+<td>19</td>
+<td>无</td>
+<td>输入输出宽度、高度、深度、通道数、组数、转置</td>
+</tr>
+<tr>
+<td>Tile DMA</td>
+<td>+0x150</td>
+<td>69</td>
+<td>0x4d00</td>
+<td>三个 tile-DMA 引擎：使能、缓存提示、基地址、步幅</td>
+</tr>
+<tr>
+<td>逐元素和平面</td>
+<td>+0x26c</td>
+<td>30</td>
+<td>0x4100</td>
+<td>逐元素和平面引擎配置、填充模式</td>
+</tr>
+<tr>
+<td>L2 和纹理</td>
+<td>+0x2ec</td>
+<td>14</td>
+<td>0x4500</td>
+<td>L2 源和结果配置、纹理模式</td>
+</tr>
+<tr>
+<td>内核格式和操作模式</td>
+<td>+0x32c</td>
+<td>11</td>
+<td>0x4900</td>
+<td>操作模式、内核对齐、稀疏和调色板格式、偏置使能</td>
+</tr>
+<tr>
+<td>L2 结果</td>
+<td>+0x360</td>
+<td>21</td>
+<td>0x5100</td>
+<td>L2 结果基地址、步幅、环绕、结果格式</td>
+</tr>
+</tbody>
+</table>
+<p>在参数化属性 blob 和引擎执行的寄存器写入记录之间是硬件任务描述符。在 M1 代上，它是版本化的描述符 ZinAneTdHw_v10，一个扁平寄存器映像，由编译器逐字段填充，然后序列化为地址和值对，分为表 23.4 列出的七个组。版本族因代而异：同一描述符在每个硅片系列中以不同的版本号实例化，字节偏移量、寄存器地址和字段宽度在版本之间移动。</p>
+<p>维度字段显示了每轴大小限制背后的硬件编码。空间维度为 15 位，通道维度为 17 位，从寄存器获取器中读取并针对厂商自己的字段符号进行了确认，如清单 23.3 所示，其中包含每个字段的描述符偏移量和位掩码。</p>
+<p>清单 23.3. 硬件任务描述符的维度和直接内存访问字段，包括其描述符偏移量和位掩码。</p>
+<div class="sourceCode" id="cb53"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* ZinAneTdHw_v10 维度和 DMA 字段，偏移量基于描述符基址。</span></span>
+10334: <span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a><span class="co">字段名称和宽度已对照厂商 TD 符号表确认。 */</span></span>
+10335: <span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>Win @<span class="bn">0x0f4</span> mask <span class="bn">0x07fff</span> <span class="co">/* 输入宽度，15 位 */</span></span>
+10336: <span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>Hin @<span class="bn">0x0f6</span> mask <span class="bn">0x07fff</span> <span class="co">/* 输入高度，15 位 */</span></span>
+10337: <span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>Cin @<span class="bn">0x100</span> mask <span class="bn">0x1ffff</span> <span class="co">/* 输入通道数，17 位（最大 131071） */</span></span>
+10338: <span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a>Cout @<span class="bn">0x104</span> mask <span class="bn">0x1ffff</span> <span class="co">/* 输出通道数，17 位 */</span></span>
+10339: <span id="cb53-7"><a href="#cb53-7" aria-hidden="true" tabindex="-1"></a>OCGSize @<span class="bn">0x118</span> mask <span class="bn">0x07</span> <span class="co">/* 输出通道组大小，3 位 */</span></span>
+10340: <span id="cb53-8"><a href="#cb53-8" aria-hidden="true" tabindex="-1"></a>numGroups @<span class="bn">0x11c</span> mask <span class="bn">0x1fff</span> <span class="co">/* 卷积组数，13 位 */</span></span>
+10341: <span id="cb53-9"><a href="#cb53-9" aria-hidden="true" tabindex="-1"></a></span>
+10342: <span id="cb53-10"><a href="#cb53-10" aria-hidden="true" tabindex="-1"></a><span class="co">/* 四个 DMA 引擎。基地址为重定位槽，加载时解析；步幅和格式在映像中写入。 */</span></span>
+10343: <span id="cb53-11"><a href="#cb53-11" aria-hidden="true" tabindex="-1"></a>TileDMASrc1 基地址 reloc reg <span class="bn">0x1344</span> <span class="co">/* 输入 tile 读取 */</span></span>
+10344: <span id="cb53-12"><a href="#cb53-12" aria-hidden="true" tabindex="-1"></a>TileDMASrc2 基地址 reloc reg <span class="bn">0x134a</span> <span class="co">/* 第二操作数 */</span></span>
+10345: <span id="cb53-13"><a href="#cb53-13" aria-hidden="true" tabindex="-1"></a>TileDMADst 基地址 reloc reg <span class="bn">0x1442</span> <span class="co">/* 输出 tile 写入 */</span></span>
+10346: <span id="cb53-14"><a href="#cb53-14" aria-hidden="true" tabindex="-1"></a>KernelDMASrc 组 GO @<span class="bn">0x2c</span> <span class="co">/* 权重库，最多 16 个子缓冲区 */</span> </span></code></pre></div>
+<p>编译器在编译时不会将缓冲区基地址写入映像。它将每个基地址保留为由寄存器地址索引的命名重定位槽，加载器将设备地址填入。完整的 v10 地址寄存器重定位表包括输入 tile、第二操作数、输出 tile 和四个内核系数流，表 23.5 逐个槽位映射。</p>
+<p>表 23.5. v10 重定位寄存器映射，编译时保持符号化的地址槽，加载时修补为设备地址。</p>
+<table>
+<tbody>
+<tr>
+<td>重定位寄存器</td>
+<td>槽位</td>
+</tr>
+<tr>
+<td>0x1344</td>
+<td>输入 tile 读取基地址</td>
+</tr>
+<tr>
+<td>0x134a</td>
+<td>第二操作数读取基地址</td>
+</tr>
+<tr>
+<td>0x1442</td>
+<td>输出 tile 写入基地址</td>
+</tr>
+<tr>
+<td>0x1554</td>
+<td>内核偏置流</td>
+</tr>
+<tr>
+<td>0x1558</td>
+<td>内核后缩放流</td>
+</tr>
+<tr>
+<td>0x155c</td>
+<td>内核调色板查找流</td>
+</tr>
+<tr>
+<td>0x1560</td>
+<td>内核激活查找流</td>
+</tr>
+</tbody>
+</table>
+<p>四个权重子流——偏置、后缩放、调色板查找和激活查找——各自拥有独立的重定位槽，因此带有折叠批归一化的卷积降级为四个独立的权重流。每个直接内存访问步幅是一个 26 位有符号字段，位于其寄存器字的位 6，针对每芯片边界表进行范围检查。张量的元素步幅变为这些寄存器字：每个引擎的行步幅、通道步幅、深度步幅和组步幅。</p>
+<p>加载器修补的不仅仅是缓冲区基地址。每个重定位是一个自定义柱状（bar）操作，将解析后的值、设备地址、片上存储器数据集标识符或缓冲区偏移量写入由其寄存器、位偏移量和位宽度命名的精确描述符位字段中。运行时可变的形状和步幅作为实时输入参数分别绑定，每个参数与一个命名过程输入相关联，并针对起始、停止和步进进行范围检查，因此一个编译后的程序无需重新编译即可服务于一系列输入形状。</p>
+<p>描述符布局按硅片代版本化：M1 构建 v10 映像，其他代在同一访问器族下构建不同版本，维度块、重定位寄存器地址和字段宽度在版本之间都发生变化。M1 的 v10 映像完全省略了计算缓存直接内存访问引擎：每个用于片上原子、计数器和等待事件原语的设置器都断言在此架构上不受支持。这就是为什么在 M1 上无法表达常驻原地状态缓冲区而退化为共享缓冲区的硅片级原因。任何读取任务描述符字节的工具都必须根据版本号进行分派，而不是假设固定布局。</p>
+<p>序列化器稀疏地发出映像：只有当寄存器的值与架构默认值不同时，才会出现在流中，这就是为什么一个小型收缩只产生六到八个记录。每个存活的记录是固定的 44 字节：一个计数标记、一个 IOMMU aperture 中的寄存器地址，以及第二个 aperture 中写入 DMA 基地址寄存器的一个或两个设备地址。寄存器地址是每次加载的设备地址，由 IOMMU 虚拟化，因此同一逻辑寄存器在不同加载中解析为不同的地址。</p>
+<h2 id="a-decoded-program">23.4 解码后的程序</h2>
+<p>一个 64 到 64 的半精度线性层，使用单位权重矩阵，是 M1 主机上包含解析后的布局 sidecar 的最小真实程序。其容器是一个魔数为 0xbeefface 的 Mach-O 形状文件，带有一个伪架构标记和可执行文件类型。解析后的帧运行 [1, 1, 1, 64] 半精度输入到 [1, 1, 1, 64] 半精度输出，所有步幅均为 128 字节。</p>
+<p>该容器将每个外部张量和权重库映射到引擎虚拟地址空间中自己页对齐的 aperture，基地址为 0x30000000，表 23.6 逐段给出，包括每个段的虚拟地址、大小、保护和角色。</p>
+<p>表 23.6. 解码后的单位线性层容器的段映射，包括每个段的虚拟地址、大小、保护和角色。</p>
+<table>
+<tbody>
+<tr>
+<td>段</td>
+<td>节</td>
+<td>虚拟地址</td>
+<td>大小</td>
+<td>保护</td>
+<td>角色</td>
+</tr>
+<tr>
+<td>guard</td>
+<td>无</td>
+<td>0x00000000</td>
+<td>0x4000</td>
+<td>无</td>
+<td>保护页</td>
+</tr>
+<tr>
+<td>input</td>
+<td>const</td>
+<td>0x30008000</td>
+<td>0x80</td>
+<td>读</td>
+<td>输入 aperture</td>
+</tr>
+<tr>
+<td>output</td>
+<td>data</td>
+<td>0x3000c000</td>
+<td>0x80</td>
+<td>写</td>
+<td>输出 aperture</td>
+</tr>
+<tr>
+<td>text</td>
+<td>text</td>
+<td>0x30010000</td>
+<td>0x474</td>
+<td>读和执行</td>
+<td>寄存器写入程序</td>
+</tr>
+<tr>
+<td>weights</td>
+<td>kernel</td>
+<td>0x30018000</td>
+<td>0x2000</td>
+<td>读</td>
+<td>权重系数</td>
+</tr>
+</tbody>
+</table>
+<p>段保护编码了硬件读写方向：输入和权重为读，输出为写。两个命名端口描述符构成外部绑定表，每个是一个 {byteSize, apertureVA, nameRef} 的 24 字节主体，将 t0 绑定到输入 aperture，将 t2 绑定到输出 aperture。</p>
+<p>text 节中的寄存器写入程序大小为 0x474 字节：一个 12 字节头部，然后是一个稀疏打包的寄存器映像，恰好包含两个任务描述符块——一个输入布局转换和融合矩阵乘法——与符号表命名的两个操作匹配。表 23.7 逐记录解码该程序，包括每个记录的偏移量、字节和含义。</p>
+<p>表 23.7. 寄存器写入程序逐记录解码，包括每个记录的偏移量、字节和含义。</p>
+<table>
+<tbody>
+<tr>
+<td>偏移量</td>
+<td>字节</td>
+<td>含义</td>
+</tr>
+<tr>
+<td>header</td>
+<td>00 00 00 00 00 00 9c 00 08 04</td>
+<td>大小和版本字，寄存器计数基址 0x408</td>
+</tr>
+<tr>
+<td>TD-0 +0x010</td>
+<td>28 00 00 00 ...</td>
+<td>记录标记 0x28，一个 tile-DMA 基地址重定位槽</td>
+</tr>
+<tr>
+<td>TD-0 +0x034</td>
+<td>16 次 80 00 00 00</td>
+<td>16 个输出通道组分区的每组值 0x80</td>
+</tr>
+<tr>
+<td>TD-0 +0x0c8</td>
+<td>21 a0 00 50 41 20 00 00</td>
+<td>寄存器 0x5021 设置为 0x2041，内核公共记录</td>
+</tr>
+<tr>
+<td>TD-0 +0x128</td>
+<td>31 20 00 01</td>
+<td>操作配置描述符 0x2031，启动操作</td>
+</tr>
+<tr>
+<td>TD-1 +0x234</td>
+<td>16 次 81 00 00 00</td>
+<td>第二个描述符的 16 个分区</td>
+</tr>
+<tr>
+<td>TD-1 +0x274</td>
+<td>00 02 04 ... 1e</td>
+<td>16 个输出通道组偏移索引</td>
+</tr>
+<tr>
+<td>TD-1 +0x470</td>
+<td>31 20 30 01</td>
+<td>操作配置描述符变体，终止程序</td>
+</tr>
+</tbody>
+</table>
+<p>16 宽度的寄存器运行是 16 个输出通道组分区的二进制形式，每个对应一个权重子内核。内核公共记录 0x5021 设置为 0x2041 在两个描述符块中完全相同，并与固件自身的程序管理器日志逐字节匹配。</p>
+<p>实时 M1 程序映像在任务描述符流本身中具有相同的形状。其程序映像的 text 节包含三个链接的 ZinAneTd&lt;7u&gt; 记录，通过 +0x1c 处的下一个记录指针链接，并跟随到空终止符。每个操作描述符有一个 32 位操作码字，该程序的三个操作解码为表 23.8 列出的操作码字。</p>
+<p>表 23.8. 从实时 M1 任务描述符流中解码的三个操作的版本 7 代码生成操作码字。</p>
+<table>
+<tbody>
+<tr>
+<td>操作</td>
+<td>操作码字</td>
+</tr>
+<tr>
+<td>卷积</td>
+<td>0x5042a063</td>
+</tr>
+<tr>
+<td>减少均值</td>
+<td>0x5000a021</td>
+</tr>
+<tr>
+<td>矩阵乘法</td>
+<td>0x5000b021</td>
+</tr>
+</tbody>
+</table>
+<p>这些是版本 7 H13 代码生成操作码。高半字 0x5042 或 0x5000 在所有操作中共享，低 16 位区分操作。完整的操作标识也存在于查找表和配置字中，而不仅仅是操作码字。容器以 LC_THREAD 尾部结束，包含过程和张量名称 main_ane、t0_ane 和 t5_ane@output。</p>
+<p>容器头部是一个 32 字节的 Mach-O 形状块，表 23.9 给出了每个字段的值和含义，其加载命令清单命名了加载器遍历的绑定和配置记录。</p>
+<p>表 23.9. 解码后的单位线性层的硬件容器头部字段，包括每个字段的值和含义。</p>
+<table>
+<tbody>
+<tr>
+<td>偏移量</td>
+<td>字段</td>
+<td>值</td>
+<td>含义</td>
+</tr>
+<tr>
+<td>0x00</td>
+<td>magic</td>
+<td>0xbeefface</td>
+<td>引擎计算可执行文件</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>cputype</td>
+<td>0x80</td>
+<td>引擎伪架构</td>
+</tr>
+<tr>
+<td>0x08</td>
+<td>cpusubtype</td>
+<td>0x4</td>
+<td>H13 代码生成修订版</td>
+</tr>
+<tr>
+<td>0x0c</td>
+<td>filetype</td>
+<td>0x2</td>
+<td>可执行文件</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>ncmds</td>
+<td>15</td>
+<td>加载命令数量</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>sizeofcmds</td>
+<td>0x32d8</td>
+<td>加载命令字节数</td>
+</tr>
+<tr>
+<td>0x18</td>
+<td>flags</td>
+<td>0x200000</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>该容器的 15 个加载命令分解为七个段命令、两个输入和输出端口描述符、三个操作描述符、一个构建信息横幅、一个源码注释和一个符号表。双端口、三操作描述符签名是单输入单输出图的形式：一个头部描述符列出 aperture 基地址，加上每个引擎通道一个描述符。头部操作描述符有一个 aperture 地址表，预先将段基地址解析到引擎虚拟映射中，每次加载由 IOMMU 重新虚拟化。</p>
+<p>构建信息横幅是生成该容器的编译器调用记录，逐字记录。它命名了工具链（zin_ane_compiler v9.509.0，中间语言组件 3520.4.1）和目标以及实时标志集，其中清单 23.4 重现的相关条目是目标选择器以及流式和缓存策略。</p>
+<p>清单 23.4. 构建信息横幅的条目，包括目标选择器以及流式、缓存和 fp8 策略标志。</p>
+<div class="sourceCode" id="cb54"><pre class="sourceCode txt"><code class="sourceCode default"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a>-t h13g 目标 H13，即 M1 引擎</span>
+10669: <span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>--fl2-cache-mode=resident 保持 L2 工作集常驻</span>
+10670: <span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a>--fkernel-rewind=enabled 内核流回绕</span>
+10671: <span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a>--split-kernel-section=true 拆分权重节</span>
+10672: <span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>--max-kernel-section-size=134217728 128 MB 权重节上限</span>
+10673: <span id="cb54-6"><a href="#cb54-6" aria-hidden="true" tabindex="-1"></a>--e4m3-overflow-setting=Saturate fp8 溢出策略：钳位，非 NaN</span>
+10674: <span id="cb54-7"><a href="#cb54-7" aria-hidden="true" tabindex="-1"></a>--memcache-size=4194304 --bss-limit=3221225472</span>
+10675: <span id="cb54-8"><a href="#cb54-8" aria-hidden="true" tabindex="-1"></a>--foptimize-ne-utilization=true --enable-global-cw-optimization=true</span>
+10676: <span id="cb54-9"><a href="#cb54-9" aria-hidden="true" tabindex="-1"></a>-i .../model.mil -o .../model.hwx.tmp </span></code></pre></div>
+<p>该容器是自描述的。其符号表包含 24 个条目的元素类型目录，带有范围编码（半精度为类型 5，8 位浮点形式为类型 16，4 位整数为类型 23），以及每个张量的每轴步幅框架（类型化数组），两者均在清单 23.5 中重现。</p>
+<p>清单 23.5. 容器的元素类型目录和每轴步幅框架。</p>
+<div class="sourceCode" id="cb55"><pre class="sourceCode javascript"><code class="sourceCode javascript"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="kw">void</span><span class="op">:</span>t1 int8<span class="op">:</span>t2<span class="op">=</span>r2<span class="op">;</span><span class="dv">0</span><span class="op">;</span><span class="dv">127</span> uint8<span class="op">:</span>t3 int16<span class="op">:</span>t4 float16<span class="op">:</span>t5<span class="op">=</span>r1<span class="op">;</span><span class="dv">2</span><span class="op">;</span><span class="dv">0</span> float<span class="op">:</span>t6<span class="op">=</span>r1<span class="op">;</span><span class="dv">4</span><span class="op">;</span><span class="dv">0</span> <span class="op">...</span> e4m3<span class="op">:</span>t16<span class="op">=</span>r1<span class="op">;</span><span class="dv">1</span><span class="op">;</span><span class="dv">0</span> <span class="op">...</span> int4<span class="op">:</span>t23<span class="op">=</span>r1<span class="op">;-</span><span class="dv">8</span><span class="op">;</span><span class="dv">7</span></span>
+10685: <span id="cb55-2"><a href="#cb55-2" aria-hidden="true" tabindex="-1"></a>t0<span class="op">:</span>t44<span class="op">=</span>ar1<span class="op">;</span><span class="dv">0</span><span class="op">;</span><span class="dv">1</span><span class="op">;</span> s128n<span class="op">:</span> s128c<span class="op">:</span> s128h<span class="op">:</span> s2w<span class="op">:</span><span class="dv">5</span> <span class="co">// 批次、通道、高度、宽度步幅 </span></span></code></pre></div>
+<p>容器将每个权重张量存储在具有固定分块的解码符号区域中。卷积权重采用 0xC0 步幅布局，矩阵乘法权重采用 0x40 步幅布局，表 23.10 给出了这两种步幅，权重值编辑不会改变程序描述符，因此权重可在原位修补。</p>
+<p>表 23.10. 每种权重类型的解码权重区域分块步幅，固定布局使主机无需重新编译即可修补权重值。</p>
+<table>
+<tbody>
+<tr>
+<td>权重类型</td>
+<td>分块步幅</td>
+</tr>
+<tr>
+<td>卷积权重</td>
+<td>0xC0</td>
+</tr>
+<tr>
+<td>矩阵乘法权重</td>
+<td>0x40</td>
+</tr>
+</tbody>
+</table>
+<p>权重库以 512 字节步幅保存 16 个子内核。解码这些字节证明了该模型：8192 字节中只有 64 个非零，每个都是等于 1.0 的半精度值 0x3c00，分布在 16 个子内核中每个分区一个，即 64×64 单位矩阵的对角线。该容器是单位线性层的完整编译形式，通过乘累加阵列复制其输入。</p>
+<p>调度描述符和容器一次对应一个网络。一个具有一个输入和五个保持状态的有状态循环模型解码为六个输入转换、一个融合推理操作和六个输出转换，状态缓冲区以 16 千字节步幅布局。整个融合图仍然是一个推理操作和一次调度。</p>
+<h2 id="on-disk-container-decoded-segment-by-segment">23.5 磁盘上容器，逐段解码</h2>
+<p>第二个 M1 样本，一个 64 KiB 的 h13g 容器，确认了相同的格式并提供了以下差异；其段映射、+0x1c 的下一条记录链、0xC0 和 0x40 权重步幅、构建信息横幅和元素类型目录均与上述单位层解码匹配。证明该格式是 Mach-O 变体而非真正 Mach-O 的差异在于头部魔数：0xbeefface 是小端字节 CE FA EF BE，而真正的 64 位 Mach-O 会保存 0xfeedfacf。修补这四个字节后，otool 和 rabin2 可以解析该文件，而内核内加载器直接接受引擎魔数。</p>
+<p>段命令命名了 __FVMLIB、__TEXT 和 __KERN_0 区域。两个 __FVMLIB 窗口声明了输入和输出张量，fileoff 和 filesize 均为零：它们没有磁盘上字节，仅作为虚拟内存声明存在，内核在提交时将其映射到地址转换 aperture 中。窗口段对齐到 0x4000（地址转换单元的 16 KiB 页粒度），而任务描述符和权重段对齐到 0x40（引擎的 64 字节 tile 粒度）。一对窗口绑定加载命令，每个是一个 {u32 size, u32 pad, u64 vmaddr, char name[8]} 记录，将符号名称 t0_ane 和 t5_ane 绑定到输入和输出虚拟地址。</p>
+<h2 id="task-descriptor-linked-list">23.5.1 任务描述符链表</h2>
+<p>该样本包含三个 ZinAneTd 记录，通过 +0x1c 处的下一个偏移量字段链接：0x000 到 0x300 到 0x500 再到终止符。每个描述符头部解码为表 23.11 给出的少量字段，包括链接列表的下一个偏移量字段。</p>
+<p>表 23.11. ZinAneTd 任务描述符的解码头部字段，+0x1c 处为链接列表的下一个偏移量字段。</p>
+<table>
+<tbody>
+<tr>
+<td>偏移量</td>
+<td>字段</td>
+<td>含义</td>
+</tr>
+<tr>
+<td>+0x00</td>
+<td>索引和标志</td>
+<td>一个 16 位索引加上一个标志高字节，其中 0x03 标记最后一条或障碍记录</td>
+</tr>
+<tr>
+<td>+0x04</td>
+<td>大小</td>
+<td>每个描述符的大小或延迟字段</td>
+</tr>
+<tr>
+<td>+0x08</td>
+<td>操作和引擎配置</td>
+<td>一个操作类型字，其低字节区分引擎通道</td>
+</tr>
+<tr>
+<td>+0x10</td>
+<td>配置掩码</td>
+<td>一个引擎配置掩码，在记录间共享 0x00fff8xx 前缀</td>
+</tr>
+<tr>
+<td>+0x18</td>
+<td>DMA 字</td>
+<td>直接内存访问或计算描述符字</td>
+</tr>
+<tr>
+<td>+0x1c</td>
+<td>下一个偏移量</td>
+<td>下一个描述符的字节偏移量，尾部为零</td>
+</tr>
+</tbody>
+</table>
+<p>每个描述符消耗的权重基地址不在头部中，而是在针对 __KERN_0 的内联重定位数组中。__text 上的 12 个重定位是 tile 基偏移量：第一个加权描述符读取 8 个 tile，第三个读取 4 个，中间的描述符没有内核重定位，因此是一个非加权通道，如激活、重塑或池化。</p>
+<h2 id="weight-tiling-and-the-per-lane-naming">23.5.2 权重分块和每通道命名</h2>
+<p>__kern_0 节保存半精度权重系数，分为 64 字节对齐的 tile，每个引擎计算通道一个 tile，在符号表中命名为 K&lt;sha256&gt;_ne_&lt;i&gt;，其中索引 i 选择通道。该样本中的第一个权重 K596A4B73… 以 3×64 的 0xc0 字节卷积步幅分为八个 tile _ne_0 到 _ne_7。第二个权重 KE125552B… 以 0x40 字节矩阵乘法步幅分为四个 tile _ne_0 到 _ne_3，每个 tile 是一个小权重，填充到 64 字节 tile 粒度。符号表还列出了该第二个权重的 tile _ne_4 到 _ne_15，都指向节末尾作为未使用通道的空哨兵 tile，通过 desc 字段为零与活动 tile 上的 0x0002 区分。此样本展示的分块规则是：权重分为 min(8, 通道数) 个 tile，每个填充到 64 字节的倍数并连续布局，每个描述符通过重定位引用 tile i 的 64 字节对齐偏移量。</p>
+<h2 id="stabs-style-shape-descriptors">23.5.3 Stabs 风格形状描述符</h2>
+<p>输入和输出张量通过符号表中 stabs 风格的类型描述符来定义形状，这些条目的符号类型为 0x20，编码为 s&lt;stride&gt;&lt;axis&gt; 字节步幅列表，涵盖四个轴：n 代表批次（batch），c 代表通道（channel），h 代表高度（height），w 代表宽度（width），如清单 23.6 中绑定的输入和输出所示。</p>
+<p>清单 23.6. 绑定输入和输出张量的 stabs 风格形状描述符，编码了每轴字节步幅。</p>
+<div class="sourceCode" id="cb56"><pre class="sourceCode txt"><code class="sourceCode default"><span id="cb56-1"><a href="#cb56-1" aria-hidden="true" tabindex="-1"></a>t0_ane (输入, vm 0x30000000): s8192n / s1024c / s64h / s2w</span>
+10826: <span id="cb56-2"><a href="#cb56-2" aria-hidden="true" tabindex="-1"></a>t5_ane (输出, vm 0x30004000): s64n / s64c / s64h / s2w </span></code></pre></div>
+<p>输入步幅描述了一个八通道张量，按通道主序打包到 64 字节 tile 和 16 KiB 页分块中。2 字节的宽度步幅是一个半精度元素，64 字节的高度步幅是一个 tile 行，1024 字节的通道步幅是 16 个高度行。同一符号表枚举了完整的硬件元素类型目录，即在下面元素类型枚举部分解码的更宽集合。</p>
+<h2 id="build-manifest">23.5.4 构建清单</h2>
+<p>构建清单与上面解码的横幅匹配，还命名了包 com.apple.ANECompilerFramework。三个 LC_THREAD 命令保存每个引擎的寄存器和线程状态，即内核在启动描述符链之前推送的上下文恢复 blob。</p>
+<h2 id="element-type-and-operation-enumerations">23.6 元素类型和操作枚举</h2>
+<p>描述符用于操作数的序列化元素类型枚举是一个闭合的 11 个代码集合，表 23.12 给出。</p>
+<p>表 23.12. 调度描述符用于操作数的 11 个序列化元素类型代码。</p>
+<table>
+<tbody>
+<tr>
+<td>代码</td>
+<td>类型</td>
+<td>代码</td>
+<td>类型</td>
+</tr>
+<tr>
+<td>0</td>
+<td>int4</td>
+<td>6</td>
+<td>uint16</td>
+</tr>
+<tr>
+<td>1</td>
+<td>uint8</td>
+<td>7</td>
+<td>int32</td>
+</tr>
+<tr>
+<td>2</td>
+<td>int8</td>
+<td>8</td>
+<td>uint32</td>
+</tr>
+<tr>
+<td>3</td>
+<td>float16</td>
+<td>9</td>
+<td>int64</td>
+</tr>
+<tr>
+<td>4</td>
+<td>float32</td>
+<td>10</td>
+<td>uint64</td>
+</tr>
+<tr>
+<td>5</td>
+<td>int16</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>8 位浮点形式和调色板化索引类型是独立的硬件元素类型空间，不属于此序列化枚举的一部分：它们由硬件抽象表门控，作为类型化字段保存，而非从属性字符串解析。容器的符号表目录运行到 24 个条目，因为它保存了那个更宽的硬件集合。</p>
+<p>描述符保存的单个推理操作是一个后端操作融合图，每个操作属于一个固定的微操作操作码空间和一个操作类选择器。操作类枚举，即描述符所称的操作模式，有 79 个成员；开发者可访问的计算单元条目出现在表 23.13 中。</p>
+<p>表 23.13. 79 成员操作类枚举的选定条目，即描述符所称的操作模式选择器。</p>
+<table>
+<tbody>
+<tr>
+<td>类</td>
+<td>代码</td>
+<td>类</td>
+<td>代码</td>
+</tr>
+<tr>
+<td>Conv</td>
+<td>1</td>
+<td>MatrixMultiplication</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Pooling</td>
+<td>2</td>
+<td>Reduction</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Concat</td>
+<td>3</td>
+<td>Linear</td>
+<td>60</td>
+</tr>
+<tr>
+<td>ElementWise</td>
+<td>4</td>
+<td>NEConv</td>
+<td>68</td>
+</tr>
+<tr>
+<td>ScaledElementWise</td>
+<td>5</td>
+<td>NEMatMul</td>
+<td>69</td>
+</tr>
+<tr>
+<td>Neuron</td>
+<td>6</td>
+<td>NEPool</td>
+<td>70</td>
+</tr>
+<tr>
+<td>GOC</td>
+<td>8</td>
+<td>SDPA</td>
+<td>77</td>
+</tr>
+<tr>
+<td>Softmax</td>
+<td>24</td>
+<td>AllReduce</td>
+<td>78</td>
+</tr>
+</tbody>
+</table>
+<p>没有转置卷积类：转置卷积降级为卷积、互相关或内核光栅化，而非独立操作模式。完整的 79 成员集合和 126 成员微操作操作码空间在附录 C 中完整解码。</p>
+<h2 id="submission-abi">23.7 提交 ABI</h2>
+<p>运行时通过一个外部方法接口将调度描述符和绑定缓冲区交给驱动程序，该接口由选择器和结构体大小键控，内核通过结构体大小而非仅选择器来消除重载选择器的歧义，如表 23.14 逐个方法所示。</p>
+<p>表 23.14. 提交接口的外部方法选择器，以及消除每个重载选择器歧义的结构体大小。</p>
+<table>
+<tbody>
+<tr>
+<td>选择器</td>
+<td>方法</td>
+<td>输入字节数</td>
+<td>输出字节数</td>
+</tr>
+<tr>
+<td>0</td>
+<td>打开设备</td>
+<td>104</td>
+<td>104</td>
+</tr>
+<tr>
+<td>2</td>
+<td>程序发送请求</td>
+<td>2376</td>
+<td>40 异步</td>
+</tr>
+<tr>
+<td>3</td>
+<td>创建程序</td>
+<td>32</td>
+<td>0</td>
+</tr>
+<tr>
+<td>3</td>
+<td>程序输出集入队</td>
+<td>40</td>
+<td>0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>准备程序</td>
+<td>56</td>
+<td>指针</td>
+</tr>
+<tr>
+<td>4</td>
+<td>程序输入就绪</td>
+<td>3104</td>
+<td>0</td>
+</tr>
+<tr>
+<td>5</td>
+<td>程序内存映射请求</td>
+<td>1 标量</td>
+<td>2080</td>
+</tr>
+<tr>
+<td>6</td>
+<td>销毁程序</td>
+<td>16</td>
+<td>0</td>
+</tr>
+<tr>
+<td>8</td>
+<td>创建程序实例</td>
+<td>32</td>
+<td>0</td>
+</tr>
+<tr>
+<td>8</td>
+<td>程序链设置活动过程</td>
+<td>32</td>
+<td>0</td>
+</tr>
+<tr>
+<td>9</td>
+<td>程序链准备</td>
+<td>16</td>
+<td>指针</td>
+</tr>
+</tbody>
+</table>
+<p>提交调用是异步选择器 2，其 2376 字节的参数结构保存程序令牌、序列号、服务质量对以及输入、输出和中间表面标识符数组。40 字节的异步回复保存序列结果和回显令牌，完成到达时通过唤醒端口而非共享内存轮询。链准备和链设置活动选择器构建固件链缓存，这是多段描述符和常驻状态路径用于将一个推理段连接到下一个的结构。</p>
+</body>
+</html>
