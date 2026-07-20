@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>第23章 总结 — 程序与容器格式</title>
+    <style>
+        body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 900px; margin: 0 auto; padding: 2em; line-height: 1.7; background: #fafafa; color: #222; }
+        h1 { border-bottom: 3px solid #1a73e8; padding-bottom: .3em; }
+        h2 { margin-top: 1.8em; border-left: 4px solid #1a73e8; padding-left: .6em; color: #1a1a1a; }
+        h3 { margin-top: 1.4em; color: #333; }
+        table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+        th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+        th { background: #e8e8e8; font-weight: 600; }
+        code { background: #eee; padding: 2px 5px; border-radius: 3px; font-size: .9em; }
+        pre { background: #f4f4f4; padding: 12px; border-radius: 5px; overflow-x: auto; }
+        .key { background: #e3f2fd; border-left: 4px solid #1a73e8; padding: .8em 1em; margin: 1em 0; border-radius: 3px; }
+        .tag { display: inline-block; background: #1a73e8; color: #fff; font-size: .75em; padding: 2px 8px; border-radius: 10px; margin-right: 4px; }
+    </style>
+</head>
+<body>
+
+<h1>第23章 程序与容器格式</h1>
+<p><span class="tag">ANE</span><span class="tag">Program Format</span><span class="tag">Hardware Container</span><span class="tag">Dispatch Descriptor</span></p>
+
+<h2>一、核心概念：双层结构</h2>
+<p>编译后的网络以<strong>两层文件</strong>形式到达引擎：</p>
+<ul>
+    <li><strong>Dispatch Descriptor（调度描述符）</strong> — FlatBuffer 格式，命名操作并绑定缓冲区，位于逻辑层</li>
+    <li><strong>Hardware Container（硬件容器）</strong> — Mach-O 形状的文件，魔数 <code>0xbeefface</code>，包含寄存器写入程序和权重库</li>
+</ul>
+<p>调度描述符在上，硬件容器在下，下层是驱动 DMA 引擎和乘法阵列的<strong>任务描述符寄存器组</strong>。</p>
+
+<h2>二、模型的六种形态</h2>
+<table>
+    <thead><tr><th>阶段</th><th>格式</th><th>标识</th><th>作用</th></tr></thead>
+    <tbody>
+        <tr><td>Intermediate-Language Text</td><td>文本</td><td>versioned 3520.4.1</td><td>编译器的输入</td></tr>
+        <tr><td>Network Description</td><td>Property List</td><td>version 1.0.10</td><td>层与连接图</td></tr>
+        <tr><td>Hardware Container</td><td>Mach-O 形状</td><td>0xbeefface</td><td>寄存器写入程序 + 权重</td></tr>
+        <tr><td>Dispatch Descriptor</td><td>FlatBuffer</td><td>vtable 0c00 1400 0400 0800</td><td>运行时提交的操作链</td></tr>
+        <tr><td>Loaded Program Image</td><td>Mach-O 形状（已签名）</td><td>0xbeefface</td><td>同一容器按加载虚拟化</td></tr>
+        <tr><td>Firmware Container</td><td>分段 Blob</td><td>ANEH / ANEP / ANES</td><td>引擎上的加载形式</td></tr>
+    </tbody>
+</table>
+
+<h2>三、Dispatch Descriptor 详解</h2>
+
+<h3>3.1 根表 E5Program</h3>
+<table>
+    <thead><tr><th>字段</th><th>Voffset</th><th>内容</th><th>类型</th></tr></thead>
+    <tbody>
+        <tr><td>0</td><td>4</td><td>符号与节区名称向量</td><td>symbol_names: [string]</td></tr>
+        <tr><td>1</td><td>8</td><td>构建信息键值对</td><td>build_info: BuildInfo</td></tr>
+        <tr><td>2</td><td>12</td><td>节区描述符向量</td><td>sections: [Section]</td></tr>
+        <tr><td>3</td><td>16</td><td>内联标量，固定值 4</td><td>format_version: int</td></tr>
+    </tbody>
+</table>
+
+<h3>3.2 12 种操作类型枚举</h3>
+<p><code>Cast, AneInference, EirInference, CpuInference, BnnsCpuInference, MlcCpuInference, MpsGraphInference, E5MinimalCpu, Quant, Dequant, Barrier, JitCall</code></p>
+
+<h3>3.3 标准程序形状</h3>
+<div class="key">
+    <strong>Op0_Cast</strong> (输入格式转换) → <strong>Op1_AneInference</strong> (整个融合图) → <strong>Op2_Cast</strong> (输出格式转换)
+</div>
+<p>Cast 负责主机半精度布局与引擎内部交织布局之间的转换；单个 AneInference 即整个融合图。</p>
+
+<h3>3.4 Schema 恢复方法</h3>
+<p>通过反编译运行时中的 <code>E5Serializer</code> 方法族恢复 FlatBuffer schema：</p>
+<ul>
+    <li><code>SerializeFunction</code> → Function 表</li>
+    <li><code>SerializeOperation</code> → Operation 表</li>
+    <li><code>SerializeOperand</code> → Operand 表</li>
+    <li><code>SerializeIOPort</code> → IOPort 表</li>
+    <li><code>SerializeOpAttrs&lt;CastOpT&gt;</code> + 11 个模板实例化 → OpAttrs union + OpType 枚举</li>
+</ul>
+
+<h3>3.5 关键性质</h3>
+<ul>
+    <li><strong>深度不变性</strong>：1 个操作与 6 个操作融合后都归约为单个 AneInference，大小相同</li>
+    <li><strong>跟踪调度数而非操作数</strong>：bridge 操作将图切为 3 段 → 3 个 AneInference，描述符变大</li>
+    <li><strong>描述符大小不随计算形状变化</strong>：内维 64 与内维 256 产生相同大小的描述符</li>
+</ul>
+
+<h2>四、Hardware Task Descriptor (ZinAneTdHw_v10)</h2>
+<p>引擎执行的最底层寄存器级程序。每个组是一个寄存器写入块，配置一个引擎单元。</p>
+
+<table>
+    <thead><tr><th>组名</th><th>结构基址</th><th>寄存器数</th><th>寄存器基址</th><th>内容</th></tr></thead>
+    <tbody>
+        <tr><td>Kernel &amp; Common</td><td>+0x2c</td><td>34</td><td>0x5500</td><td>Kernel-DMA 启用、格式、步幅、任务类型、网络 ID</td></tr>
+        <tr><td>Dimensions</td><td>+0xfc</td><td>19</td><td>—</td><td>输入/输出宽高深度通道、分组、转置</td></tr>
+        <tr><td>Tile DMA</td><td>+0x150</td><td>69</td><td>0x4d00</td><td>3 个 Tile-DMA 引擎：启用、缓存提示、基址、步幅</td></tr>
+        <tr><td>Element-wise &amp; Planar</td><td>+0x26c</td><td>30</td><td>0x4100</td><td>逐元素/平面引擎配置、填充模式</td></tr>
+        <tr><td>L2 &amp; Texture</td><td>+0x2ec</td><td>14</td><td>0x4500</td><td>L2 源/结果配置、纹理模式</td></tr>
+        <tr><td>Kernel Format &amp; Op Mode</td><td>+0x32c</td><td>11</td><td>0x4900</td><td>Op mode、内核对齐、稀疏/调色板格式、偏置启用</td></tr>
+        <tr><td>L2 Result</td><td>+0x360</td><td>21</td><td>0x5100</td><td>L2 结果基址、步幅、回绕、结果格式</td></tr>
+    </tbody>
+</table>
+
+<h3>4.1 维度硬件编码</h3>
+<ul>
+    <li>空间维度 <strong>15 位</strong>，通道维度 <strong>17 位</strong>（最大 131071）</li>
+    <li>输出通道组大小 <strong>3 位</strong>，卷积组 <strong>13 位</strong></li>
+</ul>
+
+<h3>4.2 重定位槽（7 个）</h3>
+<p>编译器不写入缓冲区基址，留为命名的重定位槽，由加载器填入设备地址：</p>
+<table>
+    <thead><tr><th>重定位寄存器</th><th>槽位</th></tr></thead>
+    <tbody>
+        <tr><td>0x1344</td><td>输入 Tile 读取基址</td></tr>
+        <tr><td>0x134a</td><td>第二操作数读取基址</td></tr>
+        <tr><td>0x1442</td><td>输出 Tile 写入基址</td></tr>
+        <tr><td>0x1554</td><td>Kernel Bias 流</td></tr>
+        <tr><td>0x1558</td><td>Kernel Post-Scale 流</td></tr>
+        <tr><td>0x155c</td><td>Kernel Palette-Lookup 流</td></tr>
+        <tr><td>0x1560</td><td>Kernel Activation-Lookup 流</td></tr>
+    </tbody>
+</table>
+<p>每个重定位是自定义条，写入解析后的值（设备地址、片上内存数据集 ID 或缓冲区偏移）到精确的描述符位域。</p>
+
+<h3>4.3 稀疏序列化</h3>
+<p>序列化器<strong>稀疏</strong>地发出寄存器映像：只有当寄存器的值与架构默认值不同时才写入流。因此小收缩仅产生 <strong>6 到 8 条记录</strong>，每条固定 <strong>44 字节</strong>。</p>
+
+<h3>4.4 按代版本化</h3>
+<p>描述符布局按芯片代版本化：M1 构建 v10，其他代使用不同版本，维度块、重定位寄存器地址和字段宽度在不同版本间移动。M1 v10 完全省略了 compute-cache DMA 引擎。</p>
+
+<h2>五、已解码程序：64→64 恒等线性层</h2>
+
+<h3>5.1 容器段映射</h3>
+<table>
+    <thead><tr><th>段</th><th>节区</th><th>虚拟地址</th><th>大小</th><th>保护</th><th>作用</th></tr></thead>
+    <tbody>
+        <tr><td>guard</td><td>—</td><td>0x00000000</td><td>0x4000</td><td>无</td><td>保护页</td></tr>
+        <tr><td>input</td><td>const</td><td>0x30008000</td><td>0x80</td><td>读</td><td>输入孔</td></tr>
+        <tr><td>output</td><td>data</td><td>0x3000c000</td><td>0x80</td><td>写</td><td>输出孔</td></tr>
+        <tr><td>text</td><td>text</td><td>0x30010000</td><td>0x474</td><td>读+执行</td><td>寄存器写入程序</td></tr>
+        <tr><td>weights</td><td>kernel</td><td>0x30018000</td><td>0x2000</td><td>读</td><td>权重系数</td></tr>
+    </tbody>
+</table>
+
+<h3>5.2 容器头字段</h3>
+<table>
+    <thead><tr><th>偏移</th><th>字段</th><th>值</th><th>含义</th></tr></thead>
+    <tbody>
+        <tr><td>0x00</td><td>magic</td><td>0xbeefface</td><td>引擎计算可执行文件</td></tr>
+        <tr><td>0x04</td><td>cputype</td><td>0x80</td><td>引擎伪架构</td></tr>
+        <tr><td>0x08</td><td>cpusubtype</td><td>0x4</td><td>H13 codegen 修订版</td></tr>
+        <tr><td>0x0c</td><td>filetype</td><td>0x2</td><td>可执行文件</td></tr>
+        <tr><td>0x10</td><td>ncmds</td><td>15</td><td>加载命令数</td></tr>
+        <tr><td>0x14</td><td>sizeofcmds</td><td>0x32d8</td><td>加载命令字节数</td></tr>
+        <tr><td>0x18</td><td>flags</td><td>0x200000</td><td>标志</td></tr>
+    </tbody>
+</table>
+<p>15 个加载命令分解为：7 个段命令、2 个 I/O 端口描述符、3 个操作描述符、1 个构建信息横幅、1 个源码注记、1 个符号表。</p>
+
+<h3>5.3 权重步幅</h3>
+<table>
+    <thead><tr><th>权重类型</th><th>Tile 步幅</th></tr></thead>
+    <tbody>
+        <tr><td>卷积权重</td><td>0xC0</td></tr>
+        <tr><td>矩阵乘权重</td><td>0x40</td></tr>
+    </tbody>
+</table>
+<p>权重分 16 个子内核，512 字节步幅。权重值可原地修补，无需重新编译。</p>
+
+<h2>六、操作类枚举（79 成员）</h2>
+<table>
+    <thead><tr><th>类名</th><th>代码</th><th>类名</th><th>代码</th></tr></thead>
+    <tbody>
+        <tr><td>Conv</td><td>1</td><td>MatrixMultiplication</td><td>18</td></tr>
+        <tr><td>Pooling</td><td>2</td><td>Reduction</td><td>20</td></tr>
+        <tr><td>Concat</td><td>3</td><td>Linear</td><td>60</td></tr>
+        <tr><td>ElementWise</td><td>4</td><td>NEConv</td><td>68</td></tr>
+        <tr><td>ScaledElementWise</td><td>5</td><td>NEMatMul</td><td>69</td></tr>
+        <tr><td>Neuron</td><td>6</td><td>NEPool</td><td>70</td></tr>
+        <tr><td>GOC</td><td>8</td><td>SDPA</td><td>77</td></tr>
+        <tr><td>Softmax</td><td>24</td><td>AllReduce</td><td>78</td></tr>
+    </tbody>
+</table>
+<p>没有转置卷积类：转置卷积降级为卷积（cross-correlation 或 kernel rasterizer）。完整 79 成员集和 126 成员微操作码空间在附录 C 中解码。</p>
+
+<h2>七、元素类型编码（11 种）</h2>
+<table>
+    <thead><tr><th>代码</th><th>类型</th><th>代码</th><th>类型</th></tr></thead>
+    <tbody>
+        <tr><td>0</td><td>int4</td><td>6</td><td>uint16</td></tr>
+        <tr><td>1</td><td>uint8</td><td>7</td><td>int32</td></tr>
+        <tr><td>2</td><td>int8</td><td>8</td><td>uint32</td></tr>
+        <tr><td>3</td><td>float16</td><td>9</td><td>int64</td></tr>
+        <tr><td>4</td><td>float32</td><td>10</td><td>uint64</td></tr>
+        <tr><td>5</td><td>int16</td><td></td><td></td></tr>
+    </tbody>
+</table>
+<p>8 位浮点形式（如 fp8）和调色板索引类型属于独立的硬件元素类型空间，通过硬件抽象层表门控。</p>
+
+<h2>八、提交 ABI</h2>
+<p>运行时通过约定的 external-method 接口将 Dispatch Descriptor 和绑定的缓冲区传递给驱动，使用 <strong>selector + 结构体大小</strong> 双重分派：</p>
+<table>
+    <thead><tr><th>Selector</th><th>方法</th><th>入字节</th><th>出字节</th></tr></thead>
+    <tbody>
+        <tr><td>0</td><td>device open</td><td>104</td><td>104</td></tr>
+        <tr><td>2</td><td>program send request</td><td>2376</td><td>40 async</td></tr>
+        <tr><td>3</td><td>program create / output set enqueue</td><td>32 / 40</td><td>0</td></tr>
+        <tr><td>4</td><td>program prepare / inputs ready</td><td>56 / 3104</td><td>ptr / 0</td></tr>
+        <tr><td>5</td><td>program memory map request</td><td>1</td><td>2080</td></tr>
+        <tr><td>6</td><td>program destroy</td><td>16</td><td>0</td></tr>
+        <tr><td>8</td><td>create instance / set active procedure</td><td>32</td><td>0</td></tr>
+        <tr><td>9</td><td>chaining prepare</td><td>16</td><td>ptr</td></tr>
+    </tbody>
+</table>
+<p>提交调用是异步的 selector 2，2376 字节参数结构包含程序令牌、序列号、QoS 对及输入/输出/中间面标识符数组。40 字节异步回复包含序列结果和回显令牌。</p>
+
+<h2>九、关键设计要点</h2>
+<ul>
+    <li><strong>魔数 0xbeefface</strong> 是小端 <code>CE FA EF BE</code>，与真实 Mach-O（0xfeedfacf）不同；修补这 4 字节后 <code>otool</code> 和 <code>rabin2</code> 可解析该文件</li>
+    <li><strong>__FVMLIB 窗口</strong>：输入输出张量声明，fileoff 和 filesize 均为 0，仅在提交时由内核映射到地址转换孔</li>
+    <li><strong>窗口对齐到 0x4000</strong>（16 KiB，地址转换单元页粒度），描述符和权重对齐到 <strong>0x40</strong>（64 字节，引擎 tile 粒度）</li>
+    <li><strong>ZinAneTd 链表</strong>：通过 +0x1c 的 next-offset 字段链接，0x000 → 0x300 → 0x500 → terminator</li>
+    <li><strong>权重分 tile</strong>：权重按 <code>min(8, lanes)</code> 分 tile，每个填充到 64 字节倍数，通过重定位引用</li>
+    <li><strong>Stabs 风格形状描述符</strong>：符号表中 type 0x20 的条目，编码为 <code>s&lt;stride&gt;&lt;axis&gt;</code> 四轴字节步幅列表</li>
+    <li><strong>容器自描述</strong>：符号表包含 24 条元素类型目录（含范围编码）、每轴步幅帧、操作类选择器等</li>
+    <li><strong>构建信息横幅</strong>以纯文本记录编译器调用，含工具链版本、目标、缓存策略、fp8 溢出策略等</li>
+</ul>
+
+</body>
+</html>
