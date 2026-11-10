@@ -14,3 +14,28 @@
 1. 参数拟合探测：common_init_result 构造时先调用 llama_params_fit（common/common.cpp:1150），内部 llama_get_device_memory_data 会加载模型来估算内存（src/llama.cpp:81）。这次用 no_alloc=true、use_mmap=false，只读元数据/规划 buffer，不用于推理。
 2.当需要减少上下文内存的情况发生，llama_params_fit_impl（src/llama.cpp）中329行代码也会调用llama_get_device_memory_data函数，进而调用到llama_model_load_from_file函数
 3. 正式加载主模型：拟合结束后，同一构造函数执行真正的加载（common/common.cpp:1158），这份模型才用于推理。
+
+# 问题五：为什么common_params_parser_init函数执行期间会调用ggml_cpu_init函数？
+因为rpc参数遍历了系统支持的back devices，具体调用了ggml_backend_cpu_reg，关键代码如下
+```c
+    if (llama_supports_rpc()) {
+        add_opt(common_arg(
+            {"--rpc"}, "SERVERS",
+            "comma separated list of RPC servers (host:port)",
+            [](common_params & params, const std::string & value) {
+                add_rpc_devices(value);
+                GGML_UNUSED(params);
+            }
+        ).set_env("LLAMA_ARG_RPC"));
+    }
+```
+片段二
+```c
+static ggml_backend_registry & get_reg() {
+    static ggml_backend_registry reg;
+    return reg;
+}
+```
+
+
+
